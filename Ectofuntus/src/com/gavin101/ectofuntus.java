@@ -1,9 +1,9 @@
 package com.gavin101;
 
-import com.android.tools.r8.graph.S;
 import com.google.common.eventbus.Subscribe;
 import org.powbot.api.*;
 import org.powbot.api.event.MessageEvent;
+import org.powbot.api.event.VarpbitChangedEvent;
 import org.powbot.api.rt4.*;
 import org.powbot.api.rt4.walking.model.Skill;
 import org.powbot.api.script.AbstractScript;
@@ -15,10 +15,8 @@ import org.powbot.api.script.paint.PaintBuilder;
 import org.powbot.mobile.script.ScriptManager;
 import org.powbot.mobile.service.ScriptUploader;
 
-import java.io.IOException;
+
 import java.util.HashMap;
-import java.util.Hashtable;
-import java.util.List;
 import java.util.Map;
 
 
@@ -72,11 +70,11 @@ public class ectofuntus extends AbstractScript {
     public static int GRINDER_ID = 16655;
     public static int BIN_ID = 16656;
     String boneType;
-    boolean loaderEmpty = true;
-    public static int LOADER_VARP = 210;
-    public static int LOADER_EMPTY = 0;
-    public static int LOADER_READY = 1;
-    public static int LOADER_FINISHED = 2;
+
+    public static int LOADER_VARP = 408;
+    public static int LOADER_EMPTY = -2017034368;
+    public static int LOADER_READY = -2017001600;
+    public static int LOADER_FINISHED = -2016968832;
 
     public Map<String, Integer> requiredItems = new HashMap<>();
 
@@ -124,11 +122,11 @@ public class ectofuntus extends AbstractScript {
                 moveToSlime();
             }
         } else {
-            if (needToBank(boneType)) {
+            if (needToBank("Pot")) {
                 handleBanking();
             } else if (needToCrush()) {
                 crushBones();
-            } else {
+            } else if (!LOADER_AREA.contains(Players.local().tile())){
                 moveToLoader();
             }
         }
@@ -165,7 +163,7 @@ public class ectofuntus extends AbstractScript {
                     String item = itemEntry.getKey();
                     Integer itemQuantity = itemEntry.getValue();
                     state("Withdrawing " +itemQuantity +" " +item);
-                    if (!Bank.stream().name(item).first().valid() || Bank.stream().name(item).first().stackSize() == 0) {
+                    if (!Bank.stream().name(item).first().valid() || Bank.stream().name(item).first().stackSize() < itemQuantity) {
                         System.out.println("Out of required items. Stopping script.");
                         Game.logout();
                         Condition.wait(() -> Players.local().valid(), 500, 20);
@@ -273,31 +271,11 @@ public class ectofuntus extends AbstractScript {
 
     public boolean needToCrush() {
         state("Checking if we need to crush bones");
-        return (Inventory.stream().name(boneType).isNotEmpty() && LOADER_AREA.contains(Players.local().tile()));
-    }
-
-    public void _crushBones() {
-        state("Entering crushBones()");
-        GameObject loader = Objects.stream().id(LOADER_ID).first();
-        if (!Game.tab(Game.Tab.INVENTORY)) {
-            Condition.wait(() -> Game.tab(Game.Tab.INVENTORY), 250, 20);
-        }
-        if (Inventory.stream().name(boneType).isNotEmpty()) {
-            Item bones = Inventory.stream().name(boneType).first();
-            if (Inventory.selectedItem().id() == -1) {
-                state("Clicking bones");
-                bones.interact("Use");
-            } else if (Inventory.selectedItem().id() == bones.id()) {
-                state("Using bones on hopper");
-                loader.interact("Use " + boneType + " -> Loader");
-                state("Waiting to finish crushing bones");
-                Condition.wait(() -> (Inventory.stream().name("Pot").isEmpty() && loaderEmpty && Players.local().animation() == -1), 800, 15);
-            }
-        }
+        return (Inventory.stream().name(boneType).isNotEmpty() && LOADER_AREA.contains(Players.local().tile()) && Players.local().animation() == -1);
     }
 
     public void crushBones() {
-        state("Entering _crushBones()");
+        state("Entering crushBones()");
         GameObject loader = Objects.stream().id(LOADER_ID).nearest().first();
         GameObject grinder = Objects.stream().id(GRINDER_ID).nearest().first();
         GameObject bin = Objects.stream().id(BIN_ID).nearest().first();
@@ -309,34 +287,37 @@ public class ectofuntus extends AbstractScript {
             Camera.turnTo(grinder);
             Condition.wait(grinder::inViewport, 250, 10);
         }
-        if (Varpbits.varpbit(LOADER_VARP) == LOADER_EMPTY && loaderEmpty && Players.local().animation() == -1) {
+        if (Varpbits.varpbit(LOADER_VARP) == LOADER_EMPTY && Players.local().animation() == -1) {
             if (Inventory.stream().name(boneType).isNotEmpty()) {
                 Item bones = Inventory.stream().name(boneType).first();
                 if (Inventory.selectedItem().id() == -1) {
                     state("Clicking bones");
-                    bones.interact("Use");
-                }
-                if (Inventory.selectedItem().id() == bones.id()) {
-                    state("Using bones on hopper");
-                    loader.interact("Use " + boneType + " -> Loader");
-                    state("Waiting to finish crushing bones");
-                    Condition.wait(() -> (Varpbits.varpbit(LOADER_VARP) == LOADER_READY), 500, 10);
+                    if (bones.interact("Use")) {
+                        Condition.wait(() -> Inventory.selectedItem().id() == bones.id(), 250, 20);
+                        state("Using bones on hopper");
+                        loader.interact("Use " + boneType + " -> Loader");
+                        state("Waiting to finish crushing bones");
+                        Condition.wait(() -> (Varpbits.varpbit(LOADER_VARP) == LOADER_READY), 300, 10);
+                    }
                 }
             }
         }
         if (Varpbits.varpbit(LOADER_VARP) == LOADER_READY && Players.local().animation() == -1) {
+            state("Winding the bone grinder");
             grinder.interact("Wind");
-            Condition.wait(() -> Varpbits.varpbit(LOADER_VARP) == LOADER_FINISHED, 500, 10);
+            Condition.wait(() -> Varpbits.varpbit(LOADER_VARP) == LOADER_FINISHED, 300, 10);
         }
         if (Varpbits.varpbit(LOADER_VARP) == LOADER_FINISHED && Players.local().animation() == -1) {
+            state("Emptying the bin");
             bin.interact("Empty");
-            Condition.wait(() -> Varpbits.varpbit(LOADER_VARP) == LOADER_EMPTY, 500, 10);
+            Condition.wait(() -> Varpbits.varpbit(LOADER_VARP) == LOADER_EMPTY, 300, 10);
         }
     }
 
+
     public void moveToLoader() {
         state("Entering moveToLoader");
-        if (Players.local().animation() == Players.local().movementAnimation()) {
+        if (Players.local().animation() != -1) {
             return;
         }
         if (!LOADER_AREA.contains(Players.local().tile()) && !ECTO_AREA.contains(Players.local().tile())) {
@@ -349,16 +330,16 @@ public class ectofuntus extends AbstractScript {
         Condition.wait(() -> LOADER_AREA.contains(Players.local().tile()), 500, 20);
     }
 
+//    @Subscribe
+//    public void onVarpChange(VarpbitChangedEvent e) {
+//        System.out.println("varp change: " +e);
+//    }
+
     @Subscribe
     public void onMessage(MessageEvent e) {
         String text = e.getMessage();
         if (text.contains("You fill a pot")) {
-            state("Setting bin to empty");
-            loaderEmpty = true;
             boneCounter++;
-        } else if (text.contains("pour into the bin") || text.contains("You wind the grinder handle")) {
-            state("Setting bin to not empty");
-            loaderEmpty = false;
         }
     }
 
