@@ -1,105 +1,214 @@
 package com.gavin101;
 
 import com.android.tools.r8.graph.S;
-import com.android.tools.r8.graph.T;
 import com.google.common.eventbus.Subscribe;
 import org.powbot.api.*;
 import org.powbot.api.event.MessageEvent;
 import org.powbot.api.rt4.*;
 import org.powbot.api.rt4.walking.model.Skill;
 import org.powbot.api.script.AbstractScript;
+import org.powbot.api.script.OptionType;
+import org.powbot.api.script.ScriptConfiguration;
 import org.powbot.api.script.ScriptManifest;
 import org.powbot.api.script.paint.Paint;
 import org.powbot.api.script.paint.PaintBuilder;
 import org.powbot.mobile.script.ScriptManager;
 import org.powbot.mobile.service.ScriptUploader;
 
+import java.io.IOException;
+import java.util.HashMap;
+import java.util.Hashtable;
+import java.util.List;
+import java.util.Map;
+
 
 @ScriptManifest(
-        name = "GEctofuntus",
+        name = "Gectofuntus",
         description = "Levels prayer via Ectofuntus.",
         version = "0.0.1"
 )
 
+@ScriptConfiguration.List(
+        {
+                @ScriptConfiguration(
+                        name = "Collect Slime",
+                        description = "Collects slime with the buckets in your bank.",
+                        optionType = OptionType.BOOLEAN,
+                        defaultValue = "false"
+                ),
+                @ScriptConfiguration(
+                        name = "Bones",
+                        description = "Type of bones to use",
+                        optionType = OptionType.STRING,
+                        defaultValue = "Dragon bones",
+                        allowedValues = {"Big bones", "Dragon bones", "Lava dragon bones", "Wyvern bones", "Superior dragon bones"}
+                )
+        }
+)
+
 public class ectofuntus extends AbstractScript {
     String currentState = "Starting";
-    boolean needSlime = true;
+    boolean needSlime;
+    int boneCounter;
 
     Area ECTO_AREA = new Area(new Tile(3654, 3525), new Tile(3664, 3515));
     Area BANK_AREA = new Area(new Tile(3686, 3471), new Tile(3691, 3467));
     Tile SLIME_TILE = new Tile(3683, 9888, 0);
-    // floor 3
-    Area SLIME_FLOOR_3 = new Area(new Tile(3670, 9901, 1), new Tile(3687, 9877, 1));
-    Area SLIME_FLOOR_2 = new Area(new Tile(3668, 9903, 2), new Tile(3693, 9874, 2));
-    Area SLIME_FLOOR_1 = new Area(new Tile(3668, 9903, 3), new Tile(3693, 9874, 3));
 
-    Area PORT_PHASMATYS = new Area(new Tile(3654, 4506, 0), new Tile(3704, 3457, 0));
+
+    Area PORT_PHASMATYS = new Area(new Tile(3659, 3507, 0), new Tile(3691, 3466, 0));
+    Tile BARRIER_TILE_WEST = new Tile(3659, 3507, 0);
+    Tile BARRIER_TILE_EAST = new Tile(3660, 3507, 0);
 
     public static int BANKBOOTH_ID = 16642;
     public static int FULL_ECTOPHIAL_ID = 4251;
     public static int EMPTY_ECTOPHIAL_ID = 4252;
     public static int BARRIER_ID = 16105;
-    public boolean barrierFlag = false;
+    public static int SLIME_ID = 17119;
+    public static int BUCKET_OF_SLIME_ID = 4286;
 
+    Area LOADER_AREA = new Area(new Tile(3654, 3526, 1), new Tile(3667, 3520, 1));
+    public static int LOADER_ID = 16654;
+    public static int GRINDER_ID = 16655;
+    public static int BIN_ID = 16656;
+    String boneType;
+    boolean loaderEmpty = true;
+    public static int LOADER_VARP = 210;
+    public static int LOADER_EMPTY = 0;
+    public static int LOADER_READY = 1;
+    public static int LOADER_FINISHED = 2;
+
+    public Map<String, Integer> requiredItems = new HashMap<>();
 
     public static void main(String[] args) {
-        new ScriptUploader().uploadAndStart("GEctofuntus", "hcim", "powbot", false, true);
+        new ScriptUploader().uploadAndStart("Gectofuntus", "", "powbot", false, true);
     }
 
-    public boolean needToBank() {
-        return (Inventory.stream().name("Bucket").isEmpty() && (Players.local().animation() != Players.local().movementAnimation()));
+    @Override
+    public void onStart() {
+        Condition.wait(() -> Players.local().valid(), 500, 50);
+        state("Checking Camera");
+        cameraCheck();
+        System.out.println("Starting Gavin101's Ectofuntus...");
+
+        Paint paint = new PaintBuilder().trackSkill(Skill.Prayer)
+                .addString(() -> currentState)
+                .addString(() -> "Bones offered: " +boneCounter)
+                .trackInventoryItem(BUCKET_OF_SLIME_ID)
+                .build();
+        addPaint(paint);
+
+        Object needSlimeObj = getOption("Collect Slime");
+        Object boneTypeObj = getOption("Bones");
+        needSlime = (boolean) needSlimeObj;
+        boneType = boneTypeObj.toString();
+
+//        requiredItems.put("Ectophial", 1);
+        if (needSlime) {
+            requiredItems.put("Bucket", 27);
+        } else {
+            requiredItems.put("Pot", 13);
+            requiredItems.put(boneType, 13);
+        }
     }
 
-    public void bankSlime() {
-        if (!PORT_PHASMATYS.contains(Players.local().tile()) && !ECTO_AREA.contains(Players.local().tile())) {
-            Condition.wait(this::useEctophial, 250, 20);
+    @Override
+    public void poll() {
+        cameraCheck();
+        if (needSlime) {
+            if (needToBank("bucket")) {
+                handleBanking();
+            } else if (needToCollect()){
+                collectSlime();
+            } else {
+                moveToSlime();
+            }
+        } else {
+            if (needToBank(boneType)) {
+                handleBanking();
+            } else if (needToCrush()) {
+                crushBones();
+            } else {
+                moveToLoader();
+            }
         }
-//        GameObject barrier = Objects.stream().id(BARRIER_ID).nearest().first();
-//        if (!barrier.valid()) {
-//            return;
-//        }
-//        if (!barrier.inViewport()) {
-//            state("Turning camera to barrier");
-//            Camera.turnTo(barrier);
-//            Condition.wait(barrier::inViewport, 250, 20);
-//        }
-//        state("Interacting with barrier");
-//        barrier.interact("Pass");
-//        if (Condition.wait(Chat::canContinue, 500, 20)) {
-//            state("Clicking continue on barrier dialog");
-//            Chat.clickContinue();
-//            Condition.wait(() -> PORT_PHASMATYS.contains(Players.local().tile()), 250, 20);
-//        }
-        if (!BANK_AREA.contains(Players.local().tile()) && (Players.local().animation() != Players.local().movementAnimation())) {
-            state("Moving to bank");
-            Movement.walkTo(BANK_AREA.getRandomTile());
-            Condition.wait(() -> BANK_AREA.contains(Players.local().tile()), 2000, 20);
-        }
-        GameObject bankBooth = Objects.stream().id(BANKBOOTH_ID).nearest().first();
-        if (!bankBooth.valid()) {
+    }
+
+    public boolean needToBank(String missingItem) {
+        state("Checking if we need to bank");
+        return (Inventory.stream().name(missingItem).isEmpty() && (Players.local().animation() != Players.local().movementAnimation()));
+    }
+
+
+    public void handleBanking() {
+        state("Entering handleBanking()");
+        if (Players.local().animation() == Players.local().movementAnimation()) {
             return;
         }
-        if (!bankBooth.inViewport()) {
-            state("Turning camera to bank booth");
-            Camera.turnTo(bankBooth);
-        }
-        state("Opening bank");
-        if (Bank.open()) {
-            state("Depositing items");
-            Bank.depositAllExcept(FULL_ECTOPHIAL_ID);
-            Condition.wait(() -> Inventory.occupiedSlotCount() <= 1, 250, 20);
-            state("Checking for buckets");
-            var bucketsInBank = Bank.stream().name("Bucket").first();
-            if (!bucketsInBank.valid() || bucketsInBank.stackSize() == 0) {
-                System.out.println("Out of buckets. Stopping script.");
-                ScriptManager.INSTANCE.stop();
+        if (BANK_AREA.contains(Players.local().tile())) {
+            state("Checking for bank booth");
+            GameObject bankBooth = Objects.stream().id(BANKBOOTH_ID).nearest().first();
+            if (!bankBooth.valid()) {
+                return;
             }
-            state("Withdrawing buckets");
-            Bank.withdraw("Bucket", Bank.Amount.ALL);
-            Condition.wait(() -> Inventory.stream().name("Bucket").isNotEmpty(), 250, 50);
-            state("Closing bank");
-            Bank.close();
-            Condition.wait(() -> !Bank.opened(), 250, 20);
+            if (!bankBooth.inViewport()) {
+                state("Turning camera to bank booth");
+                Camera.turnTo(Bank.nearest());
+                Condition.wait(bankBooth::inViewport, 250, 10);
+            }
+            if (Bank.open()) {
+                state("Depositing items");
+                Bank.depositAllExcept(FULL_ECTOPHIAL_ID);
+                Condition.wait(() -> Inventory.occupiedSlotCount() <= 1, 250, 10);
+                state("Checking for needed items");
+                for (var itemEntry : requiredItems.entrySet()) {
+                    String item = itemEntry.getKey();
+                    Integer itemQuantity = itemEntry.getValue();
+                    state("Withdrawing " +itemQuantity +" " +item);
+                    if (!Bank.stream().name(item).first().valid() || Bank.stream().name(item).first().stackSize() == 0) {
+                        System.out.println("Out of required items. Stopping script.");
+                        Game.logout();
+                        Condition.wait(() -> Players.local().valid(), 500, 20);
+                        ScriptManager.INSTANCE.stop();
+                    } else {
+                        state("Withdrawing: " +item);
+                        Bank.withdraw(item, itemQuantity);
+                        Condition.wait(() -> Inventory.stream().name(item).isNotEmpty(), 250, 50);
+                    }
+                }
+                state("Closing bank");
+                Bank.close();
+                Condition.wait(() -> !Bank.opened(), 250, 20);
+            }
+        } else if (PORT_PHASMATYS.contains(Players.local().tile())) {
+            state("Moving to bank");
+            Movement.walkTo(BANK_AREA.getRandomTile());
+            Condition.wait(() -> BANK_AREA.contains(Players.local().tile()), 500, 20);
+        } else {
+            state("Using ectophial - bank debug");
+            Condition.wait(this::useEctophial, 250, 20);
+            enterBarrier();
+            Condition.wait(() -> PORT_PHASMATYS.contains(Players.local().tile()), 250, 10);
+        }
+    }
+
+    public void enterBarrier() {
+        GameObject barrier = Objects.stream().id(BARRIER_ID).nearest().first();
+        if (!barrier.valid()) {
+            return;
+        }
+        if (!barrier.inViewport()) {
+            state("Turning camera to barrier");
+            Camera.turnTo(barrier);
+            Condition.wait(barrier::inViewport, 250, 20);
+        }
+        state("Interacting with barrier");
+        barrier.interact("Pass");
+        if (Condition.wait(Chat::canContinue, 500, 20)) {
+            state("Clicking continue on barrier dialog");
+            Chat.clickContinue();
+            state("Waiting to get inside");
+            Condition.wait(() -> Players.local().tile().equals(BARRIER_TILE_WEST) || Players.local().tile().equals(BARRIER_TILE_EAST), 250, 20);
         }
     }
 
@@ -109,27 +218,153 @@ public class ectofuntus extends AbstractScript {
             return false;
         }
         state("Using ectophial");
-        ectophial.interact("Empty");
-        state("Waiting for ectophial to refill");
-        return Condition.wait(() -> (ECTO_AREA.contains(Players.local().tile()) && Inventory.stream().id(FULL_ECTOPHIAL_ID).isNotEmpty()), 500, 20);
+        if (Game.tab(Game.Tab.INVENTORY)) {
+            ectophial.interact("Empty");
+            state("Waiting for ectophial to refill");
+            return Condition.wait(() -> (ECTO_AREA.contains(Players.local().tile()) && Inventory.stream().id(FULL_ECTOPHIAL_ID).isNotEmpty()), 500, 20);
+        }
+        return false;
+    }
+
+    public void moveToSlime() {
+        // Moves character to slime collection tile
+        state("Entered moveToSlime()");
+        if (Players.local().animation() == Players.local().movementAnimation()) {
+            return;
+        }
+        if (!ECTO_AREA.contains(Players.local().tile()) && !Players.local().tile().equals(SLIME_TILE)) {
+            if (!useEctophial()) {
+                state("Walking to Ecto token collection area");
+                Movement.walkTo(ECTO_AREA.getRandomTile());
+                Condition.wait(() -> ECTO_AREA.contains(Players.local().tile()), 500, 20);
+            }
+        }
+        if (ECTO_AREA.contains(Players.local().tile())) {
+            state("Walking to slime collection tile");
+            Movement.walkTo(SLIME_TILE);
+            Condition.wait(() -> Players.local().tile().equals(SLIME_TILE), 500, 20);
+        }
+    }
+
+    public boolean needToCollect() {
+        state("Checking if we need to collect slime");
+        return (Players.local().tile().equals(SLIME_TILE) && Inventory.stream().name("Bucket").isNotEmpty());
     }
 
     public void collectSlime() {
-        if (!ECTO_AREA.contains(Players.local().tile())) {
-            if (Game.tab(Game.Tab.INVENTORY)) {
-                if (!useEctophial()) {
-                    Movement.walkTo(ECTO_AREA.getRandomTile());
-                    Condition.wait(() -> ECTO_AREA.contains(Players.local().tile()), 500, 20);
+        state("Entering collectSlime()");
+        GameObject slime = Objects.stream(2).id(SLIME_ID).first();
+        if (!Game.tab(Game.Tab.INVENTORY)) {
+            Condition.wait(() -> Game.tab(Game.Tab.INVENTORY), 250, 20);
+        }
+        if (Inventory.stream().name("Bucket").isNotEmpty()) {
+            Item bucket = Inventory.stream().name("Bucket").first();
+            if (Inventory.selectedItem().id() == -1) {
+                state("Clicking bucket");
+                bucket.interact("Use");
+            } else if (Inventory.selectedItem().id() == bucket.id()) {
+                state("Using bucket on slime pool");
+                slime.interact("Use Bucket -> Pool of Slime");
+                state("Waiting to finish filling buckets");
+                Condition.wait(() -> Inventory.stream().name("Bucket").isEmpty(), 5_000, 15);
+            }
+        }
+    }
+
+    public boolean needToCrush() {
+        state("Checking if we need to crush bones");
+        return (Inventory.stream().name(boneType).isNotEmpty() && LOADER_AREA.contains(Players.local().tile()));
+    }
+
+    public void _crushBones() {
+        state("Entering crushBones()");
+        GameObject loader = Objects.stream().id(LOADER_ID).first();
+        if (!Game.tab(Game.Tab.INVENTORY)) {
+            Condition.wait(() -> Game.tab(Game.Tab.INVENTORY), 250, 20);
+        }
+        if (Inventory.stream().name(boneType).isNotEmpty()) {
+            Item bones = Inventory.stream().name(boneType).first();
+            if (Inventory.selectedItem().id() == -1) {
+                state("Clicking bones");
+                bones.interact("Use");
+            } else if (Inventory.selectedItem().id() == bones.id()) {
+                state("Using bones on hopper");
+                loader.interact("Use " + boneType + " -> Loader");
+                state("Waiting to finish crushing bones");
+                Condition.wait(() -> (Inventory.stream().name("Pot").isEmpty() && loaderEmpty && Players.local().animation() == -1), 800, 15);
+            }
+        }
+    }
+
+    public void crushBones() {
+        state("Entering _crushBones()");
+        GameObject loader = Objects.stream().id(LOADER_ID).nearest().first();
+        GameObject grinder = Objects.stream().id(GRINDER_ID).nearest().first();
+        GameObject bin = Objects.stream().id(BIN_ID).nearest().first();
+        if (!Game.tab(Game.Tab.INVENTORY)) {
+            Condition.wait(() -> Game.tab(Game.Tab.INVENTORY), 250, 20);
+        }
+        if (!grinder.inViewport()) {
+            state("Turning camera to grinder");
+            Camera.turnTo(grinder);
+            Condition.wait(grinder::inViewport, 250, 10);
+        }
+        if (Varpbits.varpbit(LOADER_VARP) == LOADER_EMPTY && loaderEmpty && Players.local().animation() == -1) {
+            if (Inventory.stream().name(boneType).isNotEmpty()) {
+                Item bones = Inventory.stream().name(boneType).first();
+                if (Inventory.selectedItem().id() == -1) {
+                    state("Clicking bones");
+                    bones.interact("Use");
+                }
+                if (Inventory.selectedItem().id() == bones.id()) {
+                    state("Using bones on hopper");
+                    loader.interact("Use " + boneType + " -> Loader");
+                    state("Waiting to finish crushing bones");
+                    Condition.wait(() -> (Varpbits.varpbit(LOADER_VARP) == LOADER_READY), 500, 10);
                 }
             }
         }
-        Movement.walkTo(SLIME_TILE);
-        Condition.wait(() -> Players.local().tile() == SLIME_TILE, 500, 20);
+        if (Varpbits.varpbit(LOADER_VARP) == LOADER_READY && Players.local().animation() == -1) {
+            grinder.interact("Wind");
+            Condition.wait(() -> Varpbits.varpbit(LOADER_VARP) == LOADER_FINISHED, 500, 10);
+        }
+        if (Varpbits.varpbit(LOADER_VARP) == LOADER_FINISHED && Players.local().animation() == -1) {
+            bin.interact("Empty");
+            Condition.wait(() -> Varpbits.varpbit(LOADER_VARP) == LOADER_EMPTY, 500, 10);
+        }
+    }
+
+    public void moveToLoader() {
+        state("Entering moveToLoader");
+        if (Players.local().animation() == Players.local().movementAnimation()) {
+            return;
+        }
+        if (!LOADER_AREA.contains(Players.local().tile()) && !ECTO_AREA.contains(Players.local().tile())) {
+            state("Using ectophial - moveToLoader()");
+            Condition.wait(this::useEctophial, 250, 20);
+            Condition.wait(() -> ECTO_AREA.contains(Players.local().tile()), 250, 10);
+        }
+        state("Moving to loader");
+        Movement.moveTo(LOADER_AREA.getRandomTile());
+        Condition.wait(() -> LOADER_AREA.contains(Players.local().tile()), 500, 20);
+    }
+
+    @Subscribe
+    public void onMessage(MessageEvent e) {
+        String text = e.getMessage();
+        if (text.contains("You fill a pot")) {
+            state("Setting bin to empty");
+            loaderEmpty = true;
+            boneCounter++;
+        } else if (text.contains("pour into the bin") || text.contains("You wind the grinder handle")) {
+            state("Setting bin to not empty");
+            loaderEmpty = false;
+        }
     }
 
     public void cameraCheck() {
 //        System.out.println("Zoom: " +Camera.getZoom());
-        if (Camera.getZoom() >= 50) {
+        if (Camera.getZoom() >= 10) {
             state("Zooming camera out");
             Camera.moveZoomSlider(9);
         }
@@ -139,36 +374,11 @@ public class ectofuntus extends AbstractScript {
         }
     }
 
-    @Override
-    public void poll() {
-        cameraCheck();
-        if (needSlime) {
-            if (needToBank()) {
-                bankSlime();
-            } else {
-                collectSlime();
-            }
-        } else {
-            // leveling prayer functions here
-        }
-    }
-
-    @Override
-    public void onStart() {
-//        Condition.sleep(1000);
-        Condition.wait(() -> Players.local().valid(), 500, 50);
-        state("Checking Camera");
-        cameraCheck();
-        System.out.println("Starting Gavin101's Ectofuntus...");
-
-        Paint paint = new PaintBuilder().trackSkill(Skill.Prayer)
-                .addString(() -> currentState)
-                .build();
-        addPaint(paint);
-    }
 
     public void state(String s) {
         currentState = s;
         System.out.println(s);
     }
 }
+
+
