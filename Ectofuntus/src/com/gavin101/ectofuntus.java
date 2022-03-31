@@ -2,6 +2,7 @@ package com.gavin101;
 
 import com.google.common.eventbus.Subscribe;
 import org.powbot.api.*;
+import org.powbot.api.event.BreakEvent;
 import org.powbot.api.event.MessageEvent;
 import org.powbot.api.event.VarpbitChangedEvent;
 import org.powbot.api.rt4.*;
@@ -16,6 +17,7 @@ import org.powbot.mobile.script.ScriptManager;
 import org.powbot.mobile.service.ScriptUploader;
 
 
+import java.awt.*;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -35,6 +37,12 @@ import java.util.Map;
                         defaultValue = "false"
                 ),
                 @ScriptConfiguration(
+                        name = "Crush bones",
+                        description = "Crushes bones upstairs at the ectofuntus for bonemeal.",
+                        optionType = OptionType.BOOLEAN,
+                        defaultValue = "false"
+                ),
+                @ScriptConfiguration(
                         name = "Bones",
                         description = "Type of bones to use",
                         optionType = OptionType.STRING,
@@ -47,6 +55,7 @@ import java.util.Map;
 public class ectofuntus extends AbstractScript {
     String currentState = "Starting";
     boolean needSlime;
+    boolean needBonemeal;
     int boneCounter;
 
     Area ECTO_AREA = new Area(new Tile(3654, 3525), new Tile(3664, 3515));
@@ -79,7 +88,7 @@ public class ectofuntus extends AbstractScript {
     public Map<String, Integer> requiredItems = new HashMap<>();
 
     public static void main(String[] args) {
-        new ScriptUploader().uploadAndStart("Gectofuntus", "", "powbot", false, true);
+        new ScriptUploader().uploadAndStart("Gectofuntus", "gim", "powbot", false, true);
     }
 
     @Override
@@ -104,9 +113,12 @@ public class ectofuntus extends AbstractScript {
 //        requiredItems.put("Ectophial", 1);
         if (needSlime) {
             requiredItems.put("Bucket", 27);
-        } else {
+        } else if (needBonemeal){
             requiredItems.put("Pot", 13);
             requiredItems.put(boneType, 13);
+        } else {
+            requiredItems.put("Dragon bonemeal", 13);
+            requiredItems.put("Bucket of slime", 13);
         }
     }
 
@@ -114,27 +126,48 @@ public class ectofuntus extends AbstractScript {
     public void poll() {
         cameraCheck();
         if (needSlime) {
-            if (needToBank("bucket")) {
+            if (needToBank(new String[] {"bucket"})) {
                 handleBanking();
-            } else if (needToCollect()){
+            } else if (needToCollectSlime()){
                 collectSlime();
             } else {
                 moveToSlime();
             }
-        } else {
-            if (needToBank("Pot")) {
+        } else if (needBonemeal) {
+            if (needToBank(new String[] {"Pot"})) {
                 handleBanking();
             } else if (needToCrush()) {
                 crushBones();
             } else if (!LOADER_AREA.contains(Players.local().tile())){
                 moveToLoader();
             }
+        } else {
+            if (needToBank(new String[] {"Bucket of slime", "Dragon bonemeal"})) {
+                handleBanking();
+            } else if (needToOffer()) {
+                offerBones();
+            } else if (!ECTO_AREA.contains(Players.local().tile())) {
+                useEctophial();
+            }
         }
     }
 
-    public boolean needToBank(String missingItem) {
+//    public boolean needToBank(String missingItem) {
+//        state("Checking if we need to bank");
+//        return (Inventory.stream().name(missingItem).isEmpty() && (Players.local().animation() != Players.local().movementAnimation()));
+//    }
+
+    public boolean needToBank(String[] missingItems) {
         state("Checking if we need to bank");
-        return (Inventory.stream().name(missingItem).isEmpty() && (Players.local().animation() != Players.local().movementAnimation()));
+        if (Players.local().animation() == Players.local().movementAnimation()) {
+            return false;
+        }
+        for (String missingItem : missingItems) {
+            if (Inventory.stream().name(missingItem).isEmpty()) {
+                return true;
+            }
+        }
+        return false;
     }
 
 
@@ -183,8 +216,10 @@ public class ectofuntus extends AbstractScript {
             Movement.walkTo(BANK_AREA.getRandomTile());
             Condition.wait(() -> BANK_AREA.contains(Players.local().tile()), 500, 20);
         } else {
-            state("Using ectophial - bank debug");
-            Condition.wait(this::useEctophial, 250, 20);
+            if (!ECTO_AREA.contains(Players.local().tile())) {
+                state("Using ectophial - bank debug");
+                Condition.wait(this::useEctophial, 250, 20);
+            }
             enterBarrier();
             Condition.wait(() -> PORT_PHASMATYS.contains(Players.local().tile()), 250, 10);
         }
@@ -244,7 +279,7 @@ public class ectofuntus extends AbstractScript {
         }
     }
 
-    public boolean needToCollect() {
+    public boolean needToCollectSlime() {
         state("Checking if we need to collect slime");
         return (Players.local().tile().equals(SLIME_TILE) && Inventory.stream().name("Bucket").isNotEmpty());
     }
@@ -272,6 +307,7 @@ public class ectofuntus extends AbstractScript {
     public boolean needToCrush() {
         state("Checking if we need to crush bones");
         return (Inventory.stream().name(boneType).isNotEmpty() && LOADER_AREA.contains(Players.local().tile()) && Players.local().animation() == -1);
+//                || ((Varpbits.varpbit(LOADER_VARP) == LOADER_READY) && Inventory.stream().name("Pot").isNotEmpty()) && LOADER_AREA.contains(Players.local().tile()) && Players.local().animation() == -1;
     }
 
     public void crushBones() {
@@ -314,7 +350,6 @@ public class ectofuntus extends AbstractScript {
         }
     }
 
-
     public void moveToLoader() {
         state("Entering moveToLoader");
         if (Players.local().animation() != -1) {
@@ -330,6 +365,58 @@ public class ectofuntus extends AbstractScript {
         Condition.wait(() -> LOADER_AREA.contains(Players.local().tile()), 500, 20);
     }
 
+    public boolean needToOffer() {
+        return (ECTO_AREA.contains(Players.local().tile()) && Inventory.stream().name("Bucket of slime").isNotEmpty() && Inventory.stream().name("Dragon bonemeal").isNotEmpty());
+    }
+
+    public void offerBones() {
+        state("Entering offerBones()");
+        System.out.println("Message: " +Chat.stream().textContains("in.").isNotEmpty());
+        if (needToCollectTokens()) {
+            collectTokens();
+        }
+        GameObject ectofuntus = Objects.stream().name("Ectofuntus").nearest().first();
+        if (!ectofuntus.valid()) {
+            return;
+        }
+        if (!ectofuntus.inViewport()) {
+            state("Turning camera to ectofuntus");
+            Camera.turnTo(ectofuntus);
+            Condition.wait(ectofuntus::inViewport, 250, 10);
+        }
+        state("Worshipping ectofuntus");
+        long bucketCount = Inventory.stream().name("Bucket of slime").count();
+        ectofuntus.interact("Worship");
+        Condition.wait(() -> Inventory.stream().name("Bucket of slime").count() < bucketCount, 100, 10);
+    }
+
+    public boolean needToCollectTokens() {
+        return Chat.stream().textContains("There isn't").isNotEmpty();
+//        System.out.println(Chat.stream());
+//        return  (Chat.stream().textContains("There isn't room").isNotEmpty());
+//        return Chat.canContinue();
+    }
+
+    public void collectTokens() {
+        System.out.println("Chat message: "+Chat.getChatMessage().contains("There isn't"));
+        state("Collecting tokens");
+        Npc ghost = Npcs.stream().name("Ghost disciple").nearest().first();
+        if (!ghost.valid()) {
+            return;
+        }
+        if (!ghost.inViewport()) {
+            state("Turning camera to ghost disciple");
+            Camera.turnTo(ghost);
+            Condition.wait(ghost::inViewport, 250, 10);
+        }
+        state("Talking to ghost");
+        ghost.interact("Talk-to");
+        if (Condition.wait(Chat::canContinue, 100, 10)) {
+            Chat.clickContinue();
+            Condition.wait(() -> !Chat.canContinue(), 100, 20);
+        }
+    }
+
 //    @Subscribe
 //    public void onVarpChange(VarpbitChangedEvent e) {
 //        System.out.println("varp change: " +e);
@@ -342,6 +429,14 @@ public class ectofuntus extends AbstractScript {
             boneCounter++;
         }
     }
+
+    @Subscribe
+    public void onBreak(BreakEvent e) {
+        if(Bank.opened() || Varpbits.varpbit(LOADER_VARP) == LOADER_READY) {
+            e.delay(500);
+        }
+    }
+
 
     public void cameraCheck() {
 //        System.out.println("Zoom: " +Camera.getZoom());
